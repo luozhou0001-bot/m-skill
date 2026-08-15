@@ -23,7 +23,7 @@ STATE_FILE = "state.json"
 
 
 class WorkflowError(ValueError):
-    """Raised when a workflow transition would violate the process."""
+    """Raised when a workflow transition or persisted state violates the process."""
 
 
 def _now() -> str:
@@ -70,10 +70,40 @@ class WorkflowState:
 
     @classmethod
     def from_dict(cls, data: dict) -> "WorkflowState":
+        if not isinstance(data, dict):
+            raise WorkflowError("workflow state must be a JSON object")
+
         payload = dict(data)
-        history = [Event(**event) for event in payload.pop("history", [])]
-        findings = [Finding(**finding) for finding in payload.pop("findings", [])]
-        return cls(**payload, history=history, findings=findings)
+        raw_history = payload.pop("history", [])
+        raw_findings = payload.pop("findings", [])
+
+        if not isinstance(raw_history, list):
+            raise WorkflowError("workflow history must be a list")
+        if not isinstance(raw_findings, list):
+            raise WorkflowError("workflow findings must be a list")
+
+        history: list[Event] = []
+        for index, event in enumerate(raw_history):
+            if not isinstance(event, dict):
+                raise WorkflowError(f"invalid history event at index {index}: expected an object")
+            try:
+                history.append(Event(**event))
+            except TypeError as exc:
+                raise WorkflowError(f"invalid history event at index {index}: {exc}") from exc
+
+        findings: list[Finding] = []
+        for index, finding in enumerate(raw_findings):
+            if not isinstance(finding, dict):
+                raise WorkflowError(f"invalid finding at index {index}: expected an object")
+            try:
+                findings.append(Finding(**finding))
+            except TypeError as exc:
+                raise WorkflowError(f"invalid finding at index {index}: {exc}") from exc
+
+        try:
+            return cls(**payload, history=history, findings=findings)
+        except TypeError as exc:
+            raise WorkflowError(f"invalid workflow state structure: {exc}") from exc
 
 
 def state_path(root: Path) -> Path:
@@ -95,7 +125,10 @@ def load_state(root: Path) -> WorkflowState:
     path = state_path(root)
     if not path.exists():
         raise WorkflowError(f"no workflow found at {path}; run 'mskill init' first")
-    data = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise WorkflowError(f"invalid JSON in workflow state at {path}: {exc.msg}") from exc
     return WorkflowState.from_dict(data)
 
 
@@ -232,10 +265,16 @@ def stage_prompt(state: WorkflowState) -> str:
 
 def validate(state: WorkflowState) -> list[str]:
     errors: list[str] = []
-    if not state.project.strip():
-        errors.append("project name is empty")
-    if state.architecture_revision < 0 or state.execution_revision < 0:
-        errors.append("revision counters must be non-negative")
+
+    if not isinstance(state.project, str) or not state.project.strip():
+        errors.append("project name must be a non-empty string")
+
+    for name, value in (
+        ("architecture_revision", state.architecture_revision),
+        ("execution_revision", state.execution_revision),
+    ):
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            errors.append(f"{name} must be a non-negative integer")
 
     valid_stages = {
         "architecture",
@@ -244,33 +283,47 @@ def validate(state: WorkflowState) -> list[str]:
         "final_red_team",
         "complete",
     }
-    if state.stage not in valid_stages:
-        errors.append(f"invalid stage: {state.stage}")
+    if not isinstance(state.stage, str) or state.stage not in valid_stages:
+        errors.append(f"invalid stage: {state.stage!r}")
 
     valid_severities = {"blocker", "major", "minor"}
     valid_finding_stages = {"architecture_red_team", "final_red_team"}
     valid_statuses = {"open", "resolved"}
     seen_ids: set[int] = set()
 
-    for finding in state.findings:
-        if not isinstance(finding.id, int) or isinstance(finding.id, bool) or finding.id <= 0:
-            errors.append(f"invalid finding id: {finding.id}")
-        elif finding.id in seen_ids:
-            errors.append(f"duplicate finding id: {finding.id}")
-        else:
-            seen_ids.add(finding.id)
+    for index, finding in enumerate(state.findings):
+        finding_id = finding.id
+        label = f"finding #{finding_id}" if isinstance(finding_id, int) and not isinstance(finding_id, bool) else f"finding at index {index}"
 
-        if finding.severity not in valid_severities:
-            errors.append(f"invalid severity for finding #{finding.id}: {finding.severity}")
-        if finding.stage not in valid_finding_stages:
-            errors.append(f"invalid review stage for finding #{finding.id}: {finding.stage}")
-        if finding.status not in valid_statuses:
-            errors.append(f"invalid status for finding #{finding.id}: {finding.status}")
-        if not finding.message.strip():
-            errors.append(f"finding #{finding.id} message is empty")
+        if not isinstance(finding_id, int) or isinstance(finding_id, bool) or finding_id <= 0:
+            errors.append(f"invalid finding id at index {index}: {finding_id!r}")
+        elif finding_id in seen_ids:
+            errors.append(f"duplicate finding id: {finding_id}")
+        else:
+            seen_ids.add(finding_id)
+
+        if not isinstance(finding.severity, str) or finding.severity not in valid_severities:
+            errors.append(f"invalid severity for {label}: {finding.severity!r}")
+        if not isinstance(finding.stage, str) or finding.stage not in valid_finding_stages:
+            errors.append(f"invalid review stage for {label}: {finding.stage!r}")
+        if not isinstance(finding.status, str) or finding.status not in valid_statuses:
+            errors.append(f"invalid status for {label}: {finding.status!r}")
+        if not isinstance(finding.message, str):
+            errors.append(f"{label} message must be a string")
+        elif not finding.message.strip():
+            errors.append(f"{label} message is empty")
+        if not isinstance(finding.created_at, str) or not finding.created_at.strip():
+            errors.append(f"{label} created_at must be a non-empty string")
+        if finding.resolved_at is not None and (
+            not isinstance(finding.resolved_at, str) or not finding.resolved_at.strip()
+        ):
+            errors.append(f"{label} resolved_at must be null or a non-empty string")
+        if not isinstance(finding.resolution_note, str):
+            errors.append(f"{label} resolution_note must be a string")
+
         if finding.status == "open" and finding.resolved_at is not None:
-            errors.append(f"open finding #{finding.id} has resolved_at set")
+            errors.append(f"open {label} has resolved_at set")
         if finding.status == "resolved" and finding.resolved_at is None:
-            errors.append(f"resolved finding #{finding.id} is missing resolved_at")
+            errors.append(f"resolved {label} is missing resolved_at")
 
     return errors
