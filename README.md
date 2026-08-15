@@ -20,9 +20,11 @@ It is designed for mathematical modeling competitions, research prototypes, simu
 - Persistent workflow state and revision counters
 - Architecture red-team gate before full execution
 - Final adversarial audit before completion
+- Structured Blocker/Major/Minor findings with resolution tracking
+- PASS decisions mechanically blocked by unresolved Blockers
 - Stage-specific prompts for Codex/agent orchestration
 - Explicit PASS/FAIL decisions with audit notes
-- CI-tested transition rules
+- CI-tested transition and review invariants
 
 ## Quick start
 
@@ -39,22 +41,38 @@ mskill advance --note "Problem interpretation and validation plan are frozen"
 mskill prompt
 ```
 
-Record the architecture red-team verdict:
+Record structured architecture-review findings:
 
 ```bash
-mskill gate fail --note "Boundary semantics are ambiguous; provide two interpretations"
-# revise the architecture, then submit again
-mskill advance
-mskill gate pass --note "Ambiguity resolved and sensitivity plan added"
+mskill finding add blocker "Boundary semantics are ambiguous"
+mskill finding add major "Sensitivity analysis is underspecified"
+mskill finding list
+```
+
+An unresolved Blocker prevents a PASS:
+
+```bash
+mskill gate pass
+# mskill: cannot pass gate with unresolved Blocker findings: #1
+```
+
+Resolve the Blocker explicitly, then pass the gate:
+
+```bash
+mskill finding resolve 1 --note "Two interpretations documented and tested"
+mskill gate pass --note "Architecture accepted after blocker resolution"
 ```
 
 After the full modeling work is complete:
 
 ```bash
 mskill advance --note "Execution package ready for independent audit"
+mskill finding add minor "Clarify one limitation in the handoff"
 mskill gate pass --note "No unresolved blockers"
 mskill status
 ```
+
+Use `mskill finding list --all` to inspect both open and resolved review findings.
 
 ## State machine
 
@@ -63,15 +81,17 @@ architecture
     │ advance
     ▼
 architecture_red_team ── fail ──► architecture
-    │ pass
-    ▼
+    │ pass*                         │
+    ▼                               └─ resolve findings / revise
 execution
     │ advance
     ▼
 final_red_team ─────── fail ─────► execution
-    │ pass
+    │ pass*
     ▼
 complete
+
+* PASS is rejected while any Blocker finding remains open.
 ```
 
 The CLI deliberately has no command that jumps directly from architecture to execution or from execution to complete.
@@ -81,21 +101,39 @@ The CLI deliberately has no command that jumps directly from architecture to exe
 | Command | Purpose |
 |---|---|
 | `mskill init NAME` | Initialize `.mskill/state.json` |
-| `mskill status` | Show stage and revision counters |
+| `mskill status` | Show stage, revision counters, and open finding counts |
 | `mskill advance` | Submit architecture/execution to the next red-team gate |
 | `mskill gate pass\|fail` | Record a red-team verdict |
+| `mskill finding add SEVERITY MESSAGE` | Add a Blocker/Major/Minor review finding |
+| `mskill finding list [--all]` | List open findings, or all findings |
+| `mskill finding resolve ID` | Resolve a tracked finding |
 | `mskill prompt` | Print a stage-specific agent prompt |
 | `mskill validate` | Validate stored workflow state |
 
 Use `--root PATH` to operate on another project directory.
 
+## Finding model
+
+Each finding is stored in workflow state with:
+
+- sequential ID
+- severity: `blocker`, `major`, or `minor`
+- review stage where it was discovered
+- message
+- status: `open` or `resolved`
+- creation and resolution timestamps
+- optional resolution note
+
+Findings may only be created during `architecture_red_team` or `final_red_team`. They may be resolved after the workflow returns to architecture/execution for rework. This creates an explicit defect trail instead of losing review objections inside free-text notes.
+
 ## Design principles
 
 1. **Interpretation before computation.** A numerically correct answer to the wrong problem is still wrong.
 2. **Red team is a gate, not decoration.** A FAIL changes the workflow state and forces revision.
-3. **Traceability over persuasion.** Facts, assumptions, calculations, and conclusions should remain distinguishable.
-4. **The orchestrator prevents drift.** It should coordinate execution, preserve scope, and integrate evidence.
-5. **Completion requires adversarial review.** Final review should challenge critical claims, not merely proofread them.
+3. **Blockers are enforceable defects.** A PASS cannot override an unresolved Blocker.
+4. **Traceability over persuasion.** Facts, assumptions, calculations, findings, and conclusions should remain distinguishable.
+5. **The orchestrator prevents drift.** It should coordinate execution, preserve scope, and integrate evidence.
+6. **Completion requires adversarial review.** Final review should challenge critical claims, not merely proofread them.
 
 ## Development
 
@@ -107,7 +145,7 @@ python -m unittest discover -s tests -v
 ## Roadmap
 
 - [ ] Configurable workflow policies (`mskill.toml`)
-- [ ] Machine-readable red-team findings (Blocker/Major/Minor)
+- [x] Machine-readable red-team findings (Blocker/Major/Minor)
 - [ ] Artifact manifest and reproducibility checks
 - [ ] GitHub PR/check integration
 - [ ] Optional multi-agent adapters for Codex and other agent runtimes
