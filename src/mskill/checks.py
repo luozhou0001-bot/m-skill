@@ -121,9 +121,10 @@ def render_github(state: WorkflowState, report: CheckReport) -> list[str]:
         lines.append(github_annotation("error", "M-Skill stage", report.completion_error))
 
     result = "PASS" if report.passed else "FAIL"
+    safe_stage = escape_github_data(state.stage)
     lines.append(
         "M-Skill check: "
-        f"{result} (stage={state.stage}, open_findings={len(report.open_findings)}, "
+        f"{result} (stage={safe_stage}, open_findings={len(report.open_findings)}, "
         f"open_blockers={len(report.open_blockers)})"
     )
     return lines
