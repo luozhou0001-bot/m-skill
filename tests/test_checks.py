@@ -78,6 +78,13 @@ class CheckTests(unittest.TestCase):
             "::warning title=review%3A major%2C #2::message",
         )
 
+    def test_github_summary_sanitizes_malformed_stage(self):
+        state = WorkflowState(project="demo", stage="bad\n::error::injected")
+        lines = render_github(state, evaluate_check(state))
+        self.assertTrue(any("invalid stage" in line for line in lines))
+        self.assertIn("stage=bad%0A::error::injected", lines[-1])
+        self.assertTrue(all("\n" not in line and "\r" not in line for line in lines))
+
     def test_validation_errors_fail_check(self):
         state = WorkflowState(project="", stage="architecture")
         report = evaluate_check(state)
