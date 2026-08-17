@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 import sys
 
+from .checks import evaluate_check, github_annotation, render_check
 from .workflow import (
     WorkflowError,
     add_finding,
@@ -60,6 +61,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_finding_resolve = finding_sub.add_parser("resolve", help="resolve a finding")
     p_finding_resolve.add_argument("id", type=int, help="finding ID")
     p_finding_resolve.add_argument("--note", default="", help="resolution note")
+
+    p_check = sub.add_parser("check", help="evaluate workflow state for CI/PR gating")
+    p_check.add_argument(
+        "--format",
+        dest="output_format",
+        choices=["text", "github"],
+        default="text",
+        help="output format (default: text)",
+    )
+    p_check.add_argument(
+        "--require-complete",
+        action="store_true",
+        help="fail unless the workflow stage is complete",
+    )
 
     sub.add_parser("prompt", help="print the stage-specific orchestrator prompt")
     sub.add_parser("validate", help="validate workflow state")
@@ -134,6 +149,12 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"resolved finding #{finding.id}")
                 return 0
 
+        if args.command == "check":
+            report = evaluate_check(state, require_complete=args.require_complete)
+            for line in render_check(state, report, args.output_format):
+                print(line)
+            return 0 if report.passed else 1
+
         if args.command == "prompt":
             print(stage_prompt(state), end="")
             return 0
@@ -148,7 +169,10 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
     except (WorkflowError, OSError, ValueError) as exc:
-        print(f"mskill: {exc}", file=sys.stderr)
+        if args.command == "check" and getattr(args, "output_format", "text") == "github":
+            print(github_annotation("error", "M-Skill state", exc))
+        else:
+            print(f"mskill: {exc}", file=sys.stderr)
         return 2
 
     return 0
