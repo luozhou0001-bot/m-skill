@@ -55,8 +55,16 @@ def escape_github_data(value: object) -> str:
     )
 
 
+def escape_github_property(value: object) -> str:
+    return (
+        escape_github_data(value)
+        .replace(":", "%3A")
+        .replace(",", "%2C")
+    )
+
+
 def github_annotation(level: Literal["error", "warning", "notice"], title: str, message: object) -> str:
-    return f"::{level} title={escape_github_data(title)}::{escape_github_data(message)}"
+    return f"::{level} title={escape_github_property(title)}::{escape_github_data(message)}"
 
 
 def _finding_level(finding: Finding) -> Literal["error", "warning", "notice"] | None:
