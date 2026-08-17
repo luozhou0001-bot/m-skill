@@ -2,6 +2,7 @@ import unittest
 
 from mskill.checks import (
     escape_github_data,
+    escape_github_property,
     evaluate_check,
     github_annotation,
     render_github,
@@ -65,6 +66,16 @@ class CheckTests(unittest.TestCase):
         self.assertEqual(
             github_annotation("error", "M-Skill", raw),
             "::error title=M-Skill::100%25%0D%0A::error::injected",
+        )
+
+    def test_github_property_escaping_handles_colon_and_comma(self):
+        self.assertEqual(
+            escape_github_property("review: blocker, urgent"),
+            "review%3A blocker%2C urgent",
+        )
+        self.assertEqual(
+            github_annotation("warning", "review: major, #2", "message"),
+            "::warning title=review%3A major%2C #2::message",
         )
 
     def test_validation_errors_fail_check(self):
