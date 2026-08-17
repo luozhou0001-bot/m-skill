@@ -85,6 +85,72 @@ class CliTests(unittest.TestCase):
             self.assertIn("open_findings: 2", stdout)
             self.assertIn("open_blockers: 1", stdout)
 
+    def test_check_text_passes_without_blockers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.run_cli(root, "init", "demo")
+
+            code, stdout, stderr = self.run_cli(root, "check")
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr, "")
+            self.assertIn("stage: architecture", stdout)
+            self.assertIn("open_blockers: 0", stdout)
+            self.assertTrue(stdout.rstrip().endswith("PASS"))
+
+    def test_check_github_blocker_fails_and_escapes_message(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.run_cli(root, "init", "demo")
+            self.run_cli(root, "advance")
+            self.run_cli(
+                root,
+                "finding",
+                "add",
+                "blocker",
+                "100% coverage gap\n::error::fake",
+            )
+
+            code, stdout, stderr = self.run_cli(root, "check", "--format", "github")
+            self.assertEqual(code, 1)
+            self.assertEqual(stderr, "")
+            self.assertIn("::error title=M-Skill Blocker #1::", stdout)
+            self.assertIn("100%25 coverage gap%0A::error::fake", stdout)
+            self.assertNotIn("coverage gap\n::error::fake", stdout)
+            self.assertIn("M-Skill check: FAIL", stdout)
+
+    def test_check_require_complete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.run_cli(root, "init", "demo")
+
+            code, stdout, _ = self.run_cli(root, "check", "--require-complete")
+            self.assertEqual(code, 1)
+            self.assertIn("--require-complete", stdout)
+
+            self.run_cli(root, "advance")
+            self.run_cli(root, "gate", "pass")
+            self.run_cli(root, "advance")
+            self.run_cli(root, "gate", "pass")
+
+            code, stdout, _ = self.run_cli(root, "check", "--require-complete")
+            self.assertEqual(code, 0)
+            self.assertIn("stage: complete", stdout)
+            self.assertTrue(stdout.rstrip().endswith("PASS"))
+
+    def test_check_github_reports_load_error_as_annotation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.run_cli(root, "init", "demo")
+            data = self.read_state_json(root)
+            data["findings"] = {"id": 1}
+            self.write_state_json(root, data)
+
+            code, stdout, stderr = self.run_cli(root, "check", "--format", "github")
+            self.assertEqual(code, 2)
+            self.assertEqual(stderr, "")
+            self.assertIn("::error title=M-Skill state::workflow findings must be a list", stdout)
+            self.assertNotIn("Traceback", stdout)
+
     def test_validate_reports_missing_finding_fields_without_crashing(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

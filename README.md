@@ -22,6 +22,8 @@ It is designed for mathematical modeling competitions, research prototypes, simu
 - Final adversarial audit before completion
 - Structured Blocker/Major/Minor findings with resolution tracking
 - PASS decisions mechanically blocked by unresolved Blockers
+- GitHub Actions / PR check output with native annotations
+- CI-friendly exit codes and optional completion enforcement
 - Stage-specific prompts for Codex/agent orchestration
 - Explicit PASS/FAIL decisions with audit notes
 - CI-tested transition and review invariants
@@ -107,6 +109,8 @@ The CLI deliberately has no command that jumps directly from architecture to exe
 | `mskill finding add SEVERITY MESSAGE` | Add a Blocker/Major/Minor review finding |
 | `mskill finding list [--all]` | List open findings, or all findings |
 | `mskill finding resolve ID` | Resolve a tracked finding |
+| `mskill check [--format text\|github]` | Evaluate state as a CI/PR quality gate |
+| `mskill check --require-complete` | Also require the workflow to have reached `complete` |
 | `mskill prompt` | Print a stage-specific agent prompt |
 | `mskill validate` | Validate stored workflow state |
 
@@ -125,6 +129,36 @@ Each finding is stored in workflow state with:
 - optional resolution note
 
 Findings may only be created during `architecture_red_team` or `final_red_team`. They may be resolved after the workflow returns to architecture/execution for rework. This creates an explicit defect trail instead of losing review objections inside free-text notes.
+
+## GitHub Actions / PR checks
+
+`mskill check` converts the persisted workflow state into deterministic CI behavior:
+
+- exit `0`: state is valid and policy passes
+- exit `1`: the check was evaluated but policy failed, such as an unresolved Blocker or an unmet `--require-complete`
+- exit `2`: the workflow state could not be loaded or parsed safely
+
+Normal text output is useful locally:
+
+```bash
+mskill check
+```
+
+GitHub mode emits native workflow annotations. Open findings map to annotation severity as follows:
+
+- Blocker → `::error`
+- Major → `::warning`
+- Minor → `::notice`
+
+```bash
+mskill check --format github --require-complete
+```
+
+Finding text is escaped before being emitted as a GitHub workflow command, including `%`, carriage returns, and newlines.
+
+To use M-Skill as a pull-request gate in another repository, commit that project's `.mskill/state.json` and copy [`examples/github-actions/mskill-check.yml`](examples/github-actions/mskill-check.yml) into `.github/workflows/mskill-check.yml`. The example installs the tagged M-Skill release and fails the PR check unless the workflow is complete with no unresolved Blockers.
+
+Once the workflow check is required in GitHub branch protection, a PR cannot merge while the M-Skill gate is failing.
 
 ## Design principles
 
@@ -147,7 +181,7 @@ python -m unittest discover -s tests -v
 - [ ] Configurable workflow policies (`mskill.toml`)
 - [x] Machine-readable red-team findings (Blocker/Major/Minor)
 - [ ] Artifact manifest and reproducibility checks
-- [ ] GitHub PR/check integration
+- [x] GitHub PR/check integration
 - [ ] Optional multi-agent adapters for Codex and other agent runtimes
 
 ## License
