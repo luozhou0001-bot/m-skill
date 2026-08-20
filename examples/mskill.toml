@@ -1,0 +1,6 @@
+[policy]
+# Any open finding with one of these severities makes `mskill check` fail.
+fail_on = ["blocker", "major"]
+
+# Require the workflow to reach the `complete` stage before checks can pass.
+require_complete = true
