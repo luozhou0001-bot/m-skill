@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 
 from .checks import evaluate_check, github_annotation, render_check
+from .policy import PolicyError, load_policy
 from .workflow import (
     WorkflowError,
     add_finding,
@@ -36,6 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_init.add_argument("--force", action="store_true", help="replace existing workflow state")
 
     sub.add_parser("status", help="show current workflow state")
+    sub.add_parser("policy", help="show the effective workflow policy")
 
     p_advance = sub.add_parser("advance", help="move work into the next red-team review")
     p_advance.add_argument("--note", default="")
@@ -73,7 +75,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_check.add_argument(
         "--require-complete",
         action="store_true",
-        help="fail unless the workflow stage is complete",
+        help="require complete even if mskill.toml does not",
     )
 
     sub.add_parser("prompt", help="print the stage-specific orchestrator prompt")
@@ -90,9 +92,17 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Initialized '{state.project}' at stage: {state.stage}")
             return 0
 
+        if args.command == "policy":
+            policy = load_policy(root)
+            print(f"source: {policy.source}")
+            print(f"fail_on: {','.join(policy.fail_on) if policy.fail_on else 'none'}")
+            print(f"require_complete: {str(policy.require_complete).lower()}")
+            return 0
+
         state = load_state(root)
 
         if args.command == "status":
+            policy = load_policy(root)
             open_findings = sum(1 for finding in state.findings if finding.status == "open")
             open_blockers = sum(
                 1
@@ -105,6 +115,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"execution_revisions: {state.execution_revision}")
             print(f"open_findings: {open_findings}")
             print(f"open_blockers: {open_blockers}")
+            print(f"policy: {policy.summary()}")
             print(f"updated_at: {state.updated_at}")
             return 0
 
@@ -150,7 +161,12 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
 
         if args.command == "check":
-            report = evaluate_check(state, require_complete=args.require_complete)
+            policy = load_policy(root)
+            report = evaluate_check(
+                state,
+                policy=policy,
+                require_complete=args.require_complete,
+            )
             for line in render_check(state, report, args.output_format):
                 print(line)
             return 0 if report.passed else 1
@@ -168,6 +184,12 @@ def main(argv: list[str] | None = None) -> int:
             print("OK")
             return 0
 
+    except PolicyError as exc:
+        if args.command == "check" and getattr(args, "output_format", "text") == "github":
+            print(github_annotation("error", "M-Skill policy", exc))
+        else:
+            print(f"mskill: {exc}", file=sys.stderr)
+        return 2
     except (WorkflowError, OSError, ValueError) as exc:
         if args.command == "check" and getattr(args, "output_format", "text") == "github":
             print(github_annotation("error", "M-Skill state", exc))
