@@ -7,11 +7,12 @@ from mskill.checks import (
     github_annotation,
     render_github,
 )
+from mskill.policy import Policy
 from mskill.workflow import Finding, WorkflowState
 
 
 class CheckTests(unittest.TestCase):
-    def test_open_blocker_fails_but_major_and_minor_do_not(self):
+    def test_open_blocker_fails_but_major_and_minor_do_not_by_default(self):
         state = WorkflowState(
             project="demo",
             stage="architecture_red_team",
@@ -23,6 +24,7 @@ class CheckTests(unittest.TestCase):
         report = evaluate_check(state)
         self.assertTrue(report.passed)
         self.assertEqual(len(report.open_blockers), 0)
+        self.assertEqual(len(report.blocking_findings), 0)
 
         state.findings.append(
             Finding(3, "blocker", "architecture_red_team", "metric mismatch")
@@ -30,6 +32,30 @@ class CheckTests(unittest.TestCase):
         report = evaluate_check(state)
         self.assertFalse(report.passed)
         self.assertEqual([finding.id for finding in report.open_blockers], [3])
+        self.assertEqual([finding.id for finding in report.blocking_findings], [3])
+
+    def test_policy_can_make_major_findings_fail(self):
+        state = WorkflowState(
+            project="demo",
+            stage="architecture_red_team",
+            findings=[Finding(1, "major", "architecture_red_team", "limited validation")],
+        )
+        policy = Policy(fail_on=("blocker", "major"), source="mskill.toml")
+        report = evaluate_check(state, policy=policy)
+        self.assertFalse(report.passed)
+        self.assertEqual([finding.id for finding in report.blocking_findings], [1])
+        self.assertEqual(len(report.open_blockers), 0)
+
+    def test_policy_can_allow_open_blockers(self):
+        state = WorkflowState(
+            project="demo",
+            stage="architecture_red_team",
+            findings=[Finding(1, "blocker", "architecture_red_team", "known risk")],
+        )
+        report = evaluate_check(state, policy=Policy(fail_on=()))
+        self.assertTrue(report.passed)
+        self.assertEqual(len(report.open_blockers), 1)
+        self.assertEqual(len(report.blocking_findings), 0)
 
     def test_require_complete_fails_until_complete(self):
         state = WorkflowState(project="demo", stage="execution")
@@ -41,6 +67,16 @@ class CheckTests(unittest.TestCase):
         report = evaluate_check(state, require_complete=True)
         self.assertTrue(report.passed)
         self.assertIsNone(report.completion_error)
+
+    def test_policy_require_complete_and_cli_override_are_monotonic(self):
+        state = WorkflowState(project="demo", stage="execution")
+        policy = Policy(require_complete=True, source="mskill.toml")
+        self.assertFalse(evaluate_check(state, policy=policy).passed)
+
+        relaxed = Policy(require_complete=False, source="mskill.toml")
+        self.assertFalse(
+            evaluate_check(state, policy=relaxed, require_complete=True).passed
+        )
 
     def test_github_annotation_levels_follow_severity(self):
         state = WorkflowState(

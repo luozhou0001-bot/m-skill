@@ -28,6 +28,9 @@ class CliTests(unittest.TestCase):
             encoding="utf-8",
         )
 
+    def write_policy(self, root: Path, text: str) -> None:
+        (root / "mskill.toml").write_text(text, encoding="utf-8")
+
     def test_finding_cli_lifecycle(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -72,7 +75,7 @@ class CliTests(unittest.TestCase):
             self.assertIn("[resolved]", stdout)
             self.assertIn("resolution: interpretation frozen and tested", stdout)
 
-    def test_status_reports_open_findings_and_blockers(self):
+    def test_status_reports_open_findings_blockers_and_policy(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self.run_cli(root, "init", "demo")
@@ -84,6 +87,31 @@ class CliTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertIn("open_findings: 2", stdout)
             self.assertIn("open_blockers: 1", stdout)
+            self.assertIn("policy: source=defaults; fail_on=blocker; require_complete=false", stdout)
+
+    def test_policy_command_works_without_initialized_workflow(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            code, stdout, stderr = self.run_cli(root, "policy")
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr, "")
+            self.assertIn("source: defaults", stdout)
+            self.assertIn("fail_on: blocker", stdout)
+            self.assertIn("require_complete: false", stdout)
+
+    def test_policy_command_reports_configured_policy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.write_policy(
+                root,
+                '[policy]\nfail_on = ["major", "blocker", "major"]\nrequire_complete = true\n',
+            )
+            code, stdout, stderr = self.run_cli(root, "policy")
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr, "")
+            self.assertIn("source: mskill.toml", stdout)
+            self.assertIn("fail_on: blocker,major", stdout)
+            self.assertIn("require_complete: true", stdout)
 
     def test_check_text_passes_without_blockers(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -95,6 +123,42 @@ class CliTests(unittest.TestCase):
             self.assertEqual(stderr, "")
             self.assertIn("stage: architecture", stdout)
             self.assertIn("open_blockers: 0", stdout)
+            self.assertIn("policy_failures: 0", stdout)
+            self.assertTrue(stdout.rstrip().endswith("PASS"))
+
+    def test_configured_major_can_fail_check(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.run_cli(root, "init", "demo")
+            self.run_cli(root, "advance")
+            self.run_cli(root, "finding", "add", "major", "limited validation")
+            self.write_policy(root, '[policy]\nfail_on = ["blocker", "major"]\n')
+
+            code, stdout, stderr = self.run_cli(root, "check")
+            self.assertEqual(code, 1)
+            self.assertEqual(stderr, "")
+            self.assertIn("policy_failures: 1", stdout)
+            self.assertIn("MAJOR #1: limited validation [FAIL]", stdout)
+            self.assertTrue(stdout.rstrip().endswith("FAIL"))
+
+    def test_configured_require_complete_is_enforced(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.run_cli(root, "init", "demo")
+            self.write_policy(root, '[policy]\nrequire_complete = true\n')
+
+            code, stdout, _ = self.run_cli(root, "check")
+            self.assertEqual(code, 1)
+            self.assertIn("requires 'complete'", stdout)
+
+            self.run_cli(root, "advance")
+            self.run_cli(root, "gate", "pass")
+            self.run_cli(root, "advance")
+            self.run_cli(root, "gate", "pass")
+
+            code, stdout, _ = self.run_cli(root, "check")
+            self.assertEqual(code, 0)
+            self.assertIn("stage: complete", stdout)
             self.assertTrue(stdout.rstrip().endswith("PASS"))
 
     def test_check_github_blocker_fails_and_escapes_message(self):
@@ -118,7 +182,7 @@ class CliTests(unittest.TestCase):
             self.assertNotIn("coverage gap\n::error::fake", stdout)
             self.assertIn("M-Skill check: FAIL", stdout)
 
-    def test_check_require_complete(self):
+    def test_check_require_complete_cli_override(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self.run_cli(root, "init", "demo")
@@ -149,6 +213,30 @@ class CliTests(unittest.TestCase):
             self.assertEqual(code, 2)
             self.assertEqual(stderr, "")
             self.assertIn("::error title=M-Skill state::workflow findings must be a list", stdout)
+            self.assertNotIn("Traceback", stdout)
+
+    def test_invalid_policy_is_controlled_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.run_cli(root, "init", "demo")
+            self.write_policy(root, '[policy]\nfail_on = ["critical"]\n')
+
+            code, stdout, stderr = self.run_cli(root, "check")
+            self.assertEqual(code, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("invalid policy.fail_on severity", stderr)
+            self.assertNotIn("Traceback", stderr)
+
+    def test_invalid_policy_github_mode_is_annotation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.run_cli(root, "init", "demo")
+            self.write_policy(root, '[policy]\nunknown = true\n')
+
+            code, stdout, stderr = self.run_cli(root, "check", "--format", "github")
+            self.assertEqual(code, 2)
+            self.assertEqual(stderr, "")
+            self.assertIn("::error title=M-Skill policy::unknown policy key", stdout)
             self.assertNotIn("Traceback", stdout)
 
     def test_validate_reports_missing_finding_fields_without_crashing(self):

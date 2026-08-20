@@ -4,13 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "m-skill"
-version = "0.3.0"
+version = "0.4.0"
 description = "A red-team-gated workflow CLI for rigorous AI-assisted modeling projects."
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [{name = "luozhou0001-bot"}]
 keywords = ["ai", "workflow", "red-team", "mathematical-modeling", "codex"]
+dependencies = [
+  "tomli>=2.0.1; python_version < '3.11'",
+]
 classifiers = [
   "Programming Language :: Python :: 3",
   "License :: OSI Approved :: MIT License",

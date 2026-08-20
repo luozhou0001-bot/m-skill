@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+from .policy import Policy
 from .workflow import Finding, WorkflowState, validate
 
 CheckFormat = Literal["text", "github"]
@@ -12,6 +13,7 @@ CheckFormat = Literal["text", "github"]
 class CheckReport:
     validation_errors: tuple[str, ...]
     open_findings: tuple[Finding, ...]
+    blocking_findings: tuple[Finding, ...]
     completion_error: str | None = None
 
     @property
@@ -24,24 +26,43 @@ class CheckReport:
 
     @property
     def passed(self) -> bool:
-        return not self.validation_errors and not self.open_blockers and self.completion_error is None
+        return (
+            not self.validation_errors
+            and not self.blocking_findings
+            and self.completion_error is None
+        )
 
 
-def evaluate_check(state: WorkflowState, *, require_complete: bool = False) -> CheckReport:
+def evaluate_check(
+    state: WorkflowState,
+    *,
+    policy: Policy | None = None,
+    require_complete: bool = False,
+) -> CheckReport:
+    active_policy = policy or Policy()
     validation_errors = tuple(validate(state))
     open_findings = tuple(
         finding
         for finding in state.findings
         if finding.status == "open"
     )
+    blocking_findings = tuple(
+        finding
+        for finding in open_findings
+        if active_policy.blocks(finding.severity)
+    )
+
     completion_error = None
-    if require_complete and state.stage != "complete":
+    completion_required = active_policy.require_complete or require_complete
+    if completion_required and state.stage != "complete":
         completion_error = (
-            f"workflow stage is '{state.stage}', but --require-complete requires 'complete'"
+            f"workflow stage is '{state.stage}', but active policy/--require-complete requires 'complete'"
         )
+
     return CheckReport(
         validation_errors=validation_errors,
         open_findings=open_findings,
+        blocking_findings=blocking_findings,
         completion_error=completion_error,
     )
 
@@ -83,6 +104,7 @@ def render_text(state: WorkflowState, report: CheckReport) -> list[str]:
         f"stage: {state.stage}",
         f"open_findings: {len(report.open_findings)}",
         f"open_blockers: {len(report.open_blockers)}",
+        f"policy_failures: {len(report.blocking_findings)}",
     ]
 
     for error in report.validation_errors:
@@ -90,7 +112,8 @@ def render_text(state: WorkflowState, report: CheckReport) -> list[str]:
 
     for finding in report.open_findings:
         severity = str(finding.severity).upper()
-        lines.append(f"{severity} #{finding.id}: {finding.message}")
+        marker = " [FAIL]" if finding in report.blocking_findings else ""
+        lines.append(f"{severity} #{finding.id}: {finding.message}{marker}")
 
     if report.completion_error:
         lines.append(f"ERROR: {report.completion_error}")
@@ -125,7 +148,7 @@ def render_github(state: WorkflowState, report: CheckReport) -> list[str]:
     lines.append(
         "M-Skill check: "
         f"{result} (stage={safe_stage}, open_findings={len(report.open_findings)}, "
-        f"open_blockers={len(report.open_blockers)})"
+        f"open_blockers={len(report.open_blockers)}, policy_failures={len(report.blocking_findings)})"
     )
     return lines
 
